@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Журнал звонков — CRM Автосервис</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0f1115;
+            --bg-card: #161920;
+            --bg-table: #1a1e24;
+            --bg-table-hover: #222830;
+            --bg-input: #1e232b;
+            --text-primary: #e4e6eb;
+            --text-secondary: #a0a3b1;
+            --border-color: #2a2f38;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+        }
+
+        .crm-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+
+        .crm-header {
+            background-color: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1.25rem 1.5rem;
+            border-radius: 12px 12px 0 0;
+        }
+
+        .crm-table {
+            background-color: var(--bg-table);
+            color: var(--text-primary);
+            margin-bottom: 0;
+        }
+
+        .crm-table thead th {
+            background-color: var(--bg-card);
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem;
+            white-space: nowrap;
+        }
+
+        .crm-table tbody td {
+            border-bottom: 1px solid var(--border-color);
+            padding: 0.875rem 1rem;
+            vertical-align: middle;
+            font-size: 0.9rem;
+        }
+
+        .crm-table tbody tr:hover {
+            background-color: var(--bg-table-hover);
+        }
+
+        .filter-bar {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            gap: 1rem;
+            align-items: end;
+            flex-wrap: wrap;
+        }
+
+        .filter-group label {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .filter-group input[type="date"] {
+            background-color: var(--bg-input);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 0.4rem 0.75rem;
+            font-size: 0.9rem;
+        }
+
+        .filter-group input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(0.7);
+        }
+
+        .btn-filter {
+            background-color: var(--accent);
+            border: none;
+            color: #fff;
+            padding: 0.45rem 1.25rem;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+
+        .btn-filter:hover {
+            background-color: var(--accent-hover);
+            color: #fff;
+        }
+
+        .btn-reset {
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.45rem 1.25rem;
+            border-radius: 8px;
+            font-weight: 500;
+            font-size: 0.85rem;
+            text-decoration: none;
+            transition: all 0.2s;
+        }
+
+        .btn-reset:hover {
+            background-color: var(--bg-table-hover);
+            color: var(--text-primary);
+        }
+
+        .btn-play {
+            background-color: transparent;
+            border: 1px solid var(--accent);
+            color: var(--accent);
+            padding: 0.25rem 0.75rem;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            transition: all 0.2s;
+        }
+
+        .btn-play:hover {
+            background-color: var(--accent);
+            color: #fff;
+        }
+
+        .btn-preset {
+            background-color: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 0.45rem 1rem;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .btn-preset:hover {
+            background-color: var(--bg-table-hover);
+            color: var(--text-primary);
+        }
+
+        .btn-preset.active {
+            background-color: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+
+        .pagination-bar {
+            padding: 1rem 1.5rem;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+        }
+
+        .pagination-bar .info {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .pagination-bar .pages {
+            display: flex;
+            gap: 0.35rem;
+        }
+
+        .pagination-bar .pages a,
+        .pagination-bar .pages span {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 36px;
+            height: 36px;
+            padding: 0 0.5rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            text-decoration: none;
+            transition: all 0.15s;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            background-color: transparent;
+        }
+
+        .pagination-bar .pages a:hover {
+            background-color: var(--bg-table-hover);
+            color: var(--text-primary);
+        }
+
+        .pagination-bar .pages .active {
+            background-color: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+        }
+
+        .pagination-bar .pages .disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+
+        .badge-status {
+            padding: 0.35em 0.75em;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            display: inline-block;
+        }
+
+        .status-success { background-color: rgba(34, 197, 94, 0.15); color: var(--success); }
+        .status-missed  { background-color: rgba(239, 68, 68, 0.15); color: var(--danger); }
+        .status-busy    { background-color: rgba(245, 158, 11, 0.15); color: var(--warning); }
+        .status-default { background-color: rgba(160, 163, 177, 0.15); color: var(--text-secondary); }
+
+        .type-icon {
+            font-size: 1.1rem;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            background-color: var(--bg-card);
+        }
+
+        .type-in { color: var(--success); }
+        .type-out { color: var(--accent); }
+
+        .text-muted-custom {
+            color: var(--text-secondary) !important;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container-fluid py-4 px-4">
+        <div class="crm-card">
+            <div class="crm-header d-flex justify-content-between align-items-center">
+                <div>
+                    <h4 class="m-0 fw-bold">Журнал звонков</h4>
+                    <small class="text-muted-custom">CRM Автосервис</small>
+                </div>
+            </div>
+
+            <!-- Фильтры по дате -->
+            <div class="filter-bar">
+                <!-- Quick preset buttons -->
+                <div class="d-flex gap-2 align-items-end flex-wrap me-3">
+                    <a href="/calls?preset=today" class="btn-preset<%= preset === 'today' ? ' active' : '' %>">Сегодня</a>
+                    <a href="/calls?preset=yesterday" class="btn-preset<%= preset === 'yesterday' ? ' active' : '' %>">Вчера</a>
+                    <a href="/calls?preset=week" class="btn-preset<%= preset === 'week' ? ' active' : '' %>">Неделя</a>
+                    <a href="/calls?preset=month" class="btn-preset<%= preset === 'month' ? ' active' : '' %>">Месяц</a>
+                </div>
+
+                <form method="GET" action="/calls" class="d-flex gap-3 align-items-end flex-wrap">
+                    <input type="hidden" name="preset" value="">
+                    <div class="filter-group">
+                        <label for="dateFrom">С</label>
+                        <input type="date" id="dateFrom" name="dateFrom" value="<%= dateFrom %>">
+                    </div>
+                    <div class="filter-group">
+                        <label for="dateTo">По</label>
+                        <input type="date" id="dateTo" name="dateTo" value="<%= dateTo %>">
+                    </div>
+                    <div class="filter-group">
+                        <button type="submit" class="btn-filter">Применить</button>
+                    </div>
+                    <div class="filter-group">
+                        <a href="/calls" class="btn-reset">Сбросить</a>
+                    </div>
+                </form>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table crm-table">
+                    <thead>
+                        <tr>
+                            <th>Тип</th>
+                            <th>Статус</th>
+                            <th>Дата / Время</th>
+                            <th>Телефон клиента</th>
+                            <th>Номер назначения</th>
+                            <th>Имя клиента</th>
+                            <th>Авто</th>
+                            <th>Сотрудник</th>
+                            <th>Длительность</th>
+                            <th>Запись</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% if (calls && calls.length > 0) { %>
+                            <% calls.forEach(function(call) { %>
+                                <tr>
+                                    <td>
+                                        <span class="type-icon <%= call.type === 'in' ? 'type-in' : 'type-out' %>" title="<%= call.type === 'in' ? 'Входящий' : 'Исходящий' %>">
+                                            <%= call.type === 'in' ? '📥' : '📤' %>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <% if (call.status === 'Success') { %>
+                                            <span class="badge-status status-success">Принят</span>
+                                        <% } else if (call.status === 'Missed') { %>
+                                            <span class="badge-status status-missed">Пропущенный</span>
+                                        <% } else if (call.status === 'Busy') { %>
+                                            <span class="badge-status status-busy">Занят</span>
+                                        <% } else if (call.status === 'Cancel') { %>
+                                            <span class="badge-status status-default">Отменён</span>
+                                        <% } else if (call.status === 'NotAvailable') { %>
+                                            <span class="badge-status status-default">Недоступен</span>
+                                        <% } else if (call.status === 'NotAllowed') { %>
+                                            <span class="badge-status status-default">Запрещён</span>
+                                        <% } else if (call.status === 'NotFound') { %>
+                                            <span class="badge-status status-default">Не найден</span>
+                                        <% } else { %>
+                                            <span class="badge-status status-default"><%= call.status || '—' %></span>
+                                        <% } %>
+                                    </td>
+                                    <td>
+                                        <% if (call.start_time) {
+                                            var d = new Date(call.start_time);
+                                            var dateStr = d.toLocaleDateString('ru-RU');
+                                            var timeStr = d.toLocaleTimeString('ru-RU', {hour:'2-digit', minute:'2-digit'});
+                                        %>
+                                            <div><%= dateStr %></div>
+                                            <small class="text-muted-custom"><%= timeStr %></small>
+                                        <% } else { %>
+                                            —
+                                        <% } %>
+                                    </td>
+                                    <td><%= call.client_phone || '—' %></td>
+                                    <td><%= call.diversion || '—' %></td>
+                                    <td><%= call.client_name || '—' %></td>
+                                    <td><%= call.car_number || '—' %></td>
+                                    <td>
+                                        <% if (call.user_id) { %>
+                                            <div><%= call.user_id %></div>
+                                            <% if (call.ext) { %>
+                                                <small class="text-muted-custom">доб. <%= call.ext %></small>
+                                            <% } %>
+                                        <% } else { %>
+                                            —
+                                        <% } %>
+                                    </td>
+                                    <td>
+                                        <% if (call.duration > 0) {
+                                            var min = Math.floor(call.duration / 60);
+                                            var sec = call.duration % 60;
+                                        %>
+                                            <%= min %>:<%= String(sec).padStart(2, '0') %>
+                                        <% } else { %>
+                                            <span class="text-muted-custom">—</span>
+                                        <% } %>
+                                    </td>
+<td>
+                                         <% if (call.recording_link) { %>
+                                             <audio controls src="/api/calls/recording/<%= call.id %>" style="max-width:200px;"></audio>
+                                         <% } else { %>
+                                             <span class="text-muted-custom">—</span>
+                                         <% } %>
+                                     </td>
+                                </tr>
+                            <% }); %>
+                        <% } else { %>
+                            <tr>
+                                <td colspan="10" class="text-center text-muted-custom py-5">
+                                    Звонков не найдено. Попробуйте изменить фильтры или синхронизировать данные.
+                                </td>
+                            </tr>
+                        <% } %>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Pagination -->
+            <% if (totalPages > 1) { %>
+            <div class="pagination-bar">
+                <div class="info">
+                    Всего <%= totalCount %> записей — страница <%= page %> из <%= totalPages %>
+                </div>
+                <div class="pages">
+                    <% if (page > 1) { %>
+                        <a href="<%= '/calls?page=' + (page - 1) + (preset ? '&preset=' + preset : '') + (dateFrom ? '&dateFrom=' + dateFrom : '') + (dateTo ? '&dateTo=' + dateTo : '') %>">←</a>
+                    <% } else { %>
+                        <span class="disabled">←</span>
+                    <% } %>
+
+                    <% 
+                    var startPage = Math.max(1, page - 2);
+                    var endPage = Math.min(totalPages, page + 2);
+                    if (startPage > 1) { %>
+                        <a href="<%= '/calls?page=1' + (preset ? '&preset=' + preset : '') + (dateFrom ? '&dateFrom=' + dateFrom : '') + (dateTo ? '&dateTo=' + dateTo : '') %>">1</a>
+                        <% if (startPage > 2) { %><span class="disabled">…</span><% } %>
+                    <% } %>
+                    <% for (var p = startPage; p <= endPage; p++) { %>
+                        <% if (p === page) { %>
+                            <span class="active"><%= p %></span>
+                        <% } else { %>
+                            <a href="<%= '/calls?page=' + p + (preset ? '&preset=' + preset : '') + (dateFrom ? '&dateFrom=' + dateFrom : '') + (dateTo ? '&dateTo=' + dateTo : '') %>"><%= p %></a>
+                        <% } %>
+                    <% } %>
+                    <% if (endPage < totalPages) { %>
+                        <% if (endPage < totalPages - 1) { %><span class="disabled">…</span><% } %>
+                        <a href="<%= '/calls?page=' + totalPages + (preset ? '&preset=' + preset : '') + (dateFrom ? '&dateFrom=' + dateFrom : '') + (dateTo ? '&dateTo=' + dateTo : '') %>"><%= totalPages %></a>
+                    <% } %>
+
+                    <% if (page < totalPages) { %>
+                        <a href="<%= '/calls?page=' + (page + 1) + (preset ? '&preset=' + preset : '') + (dateFrom ? '&dateFrom=' + dateFrom : '') + (dateTo ? '&dateTo=' + dateTo : '') %>">→</a>
+                    <% } else { %>
+                        <span class="disabled">→</span>
+                    <% } %>
+                </div>
+            </div>
+            <% } %>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

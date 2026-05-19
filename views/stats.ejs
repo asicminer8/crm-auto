@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Статистика звонков — CRM Автосервис</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0f1115;
+            --bg-card: #161920;
+            --bg-table: #1a1e24;
+            --text-primary: #e4e6eb;
+            --text-secondary: #a0a3b1;
+            --border-color: #2a2f38;
+            --accent: rgb(255,135,24);
+        }
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            padding-bottom: 1px;
+        }
+        .crm-card {
+            background-color: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+        }
+        .crm-header {
+            background-color: var(--bg-card);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1.25rem 1.5rem;
+            border-radius: 12px 12px 0 0;
+        }
+        .crm-table {
+            background-color: var(--bg-table);
+            color: var(--text-primary);
+        }
+        .crm-table th {
+            background-color: var(--bg-card);
+            color: var(--text-secondary);
+            font-weight: 600;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* Sidebar styles */
+        .sidebar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 220px;
+            height: 100vh;
+            background-color: var(--bg-card);
+            border-right: 1px solid var(--border-color);
+            padding: 1.5rem 1rem;
+            z-index: 1000;
+        }
+        .sidebar .nav-link {
+            color: var(--text-secondary);
+            padding: 0.65rem 1rem;
+            border-radius: 8px;
+            margin-bottom: 0.25rem;
+            display: block;
+            text-decoration: none;
+            transition: all 0.2s;
+            font-size: 0.95rem;
+        }
+        .sidebar .nav-link:hover {
+            background-color: var(--bg-table-hover);
+            color: var(--text-primary);
+        }
+        .sidebar .nav-link.active {
+            background-color: var(--accent);
+            color: #fff;
+        }
+        .main-content {
+            margin-left: 220px;
+            padding: 1.5rem 2rem;
+        }
+
+    </style>
+</head>
+<body>
+    <%- include('partials/sidebar', { currentPage: 'stats' }) %>
+
+    <div class="main-content">
+        <div class="container py-2">
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1 class="h3 mb-0">📊 Статистика звонков</h1>
+            <a href="/calls" class="btn btn-outline-secondary btn-sm">← Журнал звонков</a>
+        </div>
+
+        <div class="row g-4">
+            <!-- Новые клиенты -->
+            <div class="col-12 col-lg-6">
+                <div class="crm-card">
+                    <div class="crm-header">
+                        <h5 class="mb-0">Новые клиенты по месяцам</h5>
+                    </div>
+                    <div class="p-3">
+                        <table class="table table-dark table-hover crm-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Месяц</th>
+                                    <th class="text-end">Новых клиентов</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <% if (newClients.length === 0) { %>
+                                    <tr><td colspan="2" class="text-center text-secondary">Нет данных</td></tr>
+                                <% } else { %>
+                                    <% newClients.forEach(row => { %>
+                                        <tr>
+                                            <td><%= row.month %></td>
+                                            <td class="text-end"><strong><%= row.new_clients %></strong></td>
+                                        </tr>
+                                    <% }) %>
+                                <% } %>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Общая статистика -->
+            <div class="col-12 col-lg-6">
+                <div class="crm-card">
+                    <div class="crm-header">
+                        <h5 class="mb-0">Звонки по месяцам</h5>
+                    </div>
+                    <div class="p-3">
+                        <table class="table table-dark table-hover crm-table mb-0">
+                            <thead>
+                                <tr>
+                                    <th>Месяц</th>
+                                    <th class="text-end">Всего</th>
+                                    <th class="text-end text-success">Принятые</th>
+                                    <th class="text-end text-danger">Пропущенные</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <% if (monthlyStats.length === 0) { %>
+                                    <tr><td colspan="4" class="text-center text-secondary">Нет данных</td></tr>
+                                <% } else { %>
+                                    <% monthlyStats.forEach(row => { %>
+                                        <tr>
+                                            <td><%= row.month %></td>
+                                            <td class="text-end"><strong><%= row.total_calls %></strong></td>
+                                            <td class="text-end text-success"><%= row.success_calls %></td>
+                                            <td class="text-end text-danger"><%= row.missed_calls %></td>
+                                        </tr>
+                                    <% }) %>
+                                <% } %>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

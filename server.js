@@ -7,6 +7,8 @@ const http = require('http');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(express.static(__dirname));
+
 // Beeline отправляет данные в формате application/x-www-form-urlencoded
 app.use(bodyParser.urlencoded({ extended: true }));
 
@@ -71,143 +73,139 @@ function mapBeelineStatus(status) {
 
 // Загрузка истории звонков из Beeline API v2 (Portal API)
 async function fetchHistoryFromBeeline(optDateFrom, optDateTo) {
-    return new Promise((resolve, reject) => {
-        const now = new Date();
+    const now = new Date();
 
-        let dateFrom, dateTo;
-        if (optDateFrom && optDateTo) {
-            dateFrom = new Date(optDateFrom);
-            dateTo = new Date(optDateTo);
-            dateTo.setDate(dateTo.getDate() + 1); // включительно
-        } else {
-            dateFrom = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0));
-            dateTo = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0));
-        }
+    let dateFrom, dateTo;
+    if (optDateFrom && optDateTo) {
+        dateFrom = new Date(optDateFrom + 'T00:00:00Z');
+        const [y, m, d] = optDateTo.split('-').map(Number);
+        dateTo = new Date(Date.UTC(y, m - 1, d + 1));
+    } else {
+        dateFrom = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0));
+        dateTo = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0));
+    }
 
-        // ISO-8601 формат с Z (UTC) — требование API
-        const dateFromStr = dateFrom.toISOString();
-        const dateToStr = dateTo.toISOString();
+    const dateFromStr = dateFrom.toISOString();
+    const dateToStr = dateTo.toISOString();
 
+    const pageSize = 100;
+    let page = 0;
+    let totalInserted = 0;
+    let hasMore = true;
+
+    while (hasMore) {
         const queryParams = new URLSearchParams({
             dateFrom: dateFromStr,
             dateTo: dateToStr,
-            page: '0',
-            pageSize: '100'
+            page: String(page),
+            pageSize: String(pageSize)
         }).toString();
 
         const path = `/apis/portal/v2/statistics?${queryParams}`;
 
-        const options = {
-            hostname: BEELINE_API_HOST,
-            port: 443,
-            path: path,
-            method: 'GET',
-            headers: {
-                'X-MPBX-API-AUTH-TOKEN': CRM_TOKEN,
-                'Accept': 'application/json'
-            }
-        };
+        const records = await new Promise((resolvePage, rejectPage) => {
+            const options = {
+                hostname: BEELINE_API_HOST,
+                port: 443,
+                path: path,
+                method: 'GET',
+                headers: {
+                    'X-MPBX-API-AUTH-TOKEN': CRM_TOKEN,
+                    'Accept': 'application/json'
+                }
+            };
 
-        const req = https.request(options, (res) => {
-            let data = '';
-            res.setEncoding('utf8');
-            res.on('data', (chunk) => { data += chunk; });
-            res.on('end', async () => {
-                try {
+            const req = https.request(options, (res) => {
+                let data = '';
+                res.setEncoding('utf8');
+                res.on('data', (chunk) => { data += chunk; });
+                res.on('end', () => {
                     if (res.statusCode !== 200) {
                         console.error(`Beeline API returned status ${res.statusCode}: ${data}`);
-                        resolve(0);
-                        return;
+                        return resolvePage([]);
                     }
-
-                    const records = JSON.parse(data);
-                    if (!Array.isArray(records) || records.length === 0) {
-                        console.log('No data returned from Beeline statistics');
-                        resolve(0);
-                        return;
-                    }
-
-                    let inserted = 0;
-                    const dbClient = await pool.connect();
                     try {
-                        // Собираем уникальных абонентов и добавляем в ats_users (чтобы FK не нарушался)
-                        const userIds = new Set();
-                        for (const record of records) {
-                            if (record.abonent && record.abonent.userId) {
-                                userIds.add(record.abonent.userId);
-                            }
-                        }
-                        if (userIds.size > 0) {
-                            const userArray = Array.from(userIds);
-                            const placeholders = userArray.map((_, i) => `($${i + 1})`).join(',');
-                            await dbClient.query(`
-                                INSERT INTO ats_users (user_id) VALUES ${placeholders}
-                                ON CONFLICT (user_id) DO NOTHING
-                            `, userArray);
-                        }
-
-                        for (const record of records) {
-                            const direction = record.direction === 'INBOUND' ? 'in' : (record.direction === 'OUTBOUND' ? 'out' : null);
-                            // Для входящих: phone_from — клиент, phone_to — наш номер
-                            // Для исходящих: phone_from — наш номер, phone_to — клиент
-                            const clientPhone = direction === 'in' ? (record.phone_from || record.phone) : (record.phone_to || record.phone);
-                            const diversion = direction === 'in' ? (record.phone_to || null) : null;
-
-// Используем externalTrackingId из API, если есть, иначе генерируем с суффиксом
-                             const callId = record.externalTrackingId
-                                 ? `bl-${record.externalTrackingId}`
-                                 : `bl-${record.startDate}-${direction}-${clientPhone || 'unknown'}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-
-                            const values = [
-                                callId,
-                                direction,
-                                mapBeelineStatus(record.status),
-                                clientPhone,
-                                record.abonent ? record.abonent.userId : null,
-                                record.abonent ? record.abonent.extension : null,
-                                record.department || null,
-                                null, // telnum нет в v2
-                                diversion,
-                                record.startDate ? new Date(record.startDate) : null,
-                                null, // wait_time нет в v2
-                                record.duration ? Math.round(record.duration / 1000) : null,
-                                null  // recording_link - нужно получать через v3 API
-                            ];
-
-                            const query = `
-                                INSERT INTO calls (call_id, type, status, client_phone, user_id, ext, group_name, telnum, diversion, start_time, wait_time, duration, recording_link)
-                                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-                                ON CONFLICT (start_time, type, client_phone, user_id) DO NOTHING
-                            `;
-                            await dbClient.query(query, values);
-                            inserted++;
-                        }
-                    } finally {
-                        dbClient.release();
+                        const parsed = JSON.parse(data);
+                        resolvePage(Array.isArray(parsed) ? parsed : []);
+                    } catch (e) {
+                        resolvePage([]);
                     }
-
-                    console.log(`Loaded ${inserted} records from Beeline statistics`);
-
-                    // После синхронизации статистики подтягиваем записи разговоров
-                    try {
-                        await fetchRecordingsForDateRange(dateFromStr, dateToStr);
-                    } catch (recErr) {
-                        console.error('Failed to fetch recordings:', recErr.message);
-                    }
-
-                    resolve(inserted);
-                } catch (err) {
-                    reject(err);
-                }
+                });
             });
+
+            req.on('error', (err) => rejectPage(err));
+            req.end();
         });
 
-        req.on('error', (err) => {
-            reject(err);
-        });
+        if (!records || records.length === 0) {
+            hasMore = false;
+            break;
+        }
 
-        req.end();
-    });
+        let inserted = 0;
+        const dbClient = await pool.connect();
+        try {
+            const userIds = new Set();
+            for (const record of records) {
+                if (record.abonent && record.abonent.userId) {
+                    userIds.add(record.abonent.userId);
+                }
+            }
+            if (userIds.size > 0) {
+                const userArray = Array.from(userIds);
+                const placeholders = userArray.map((_, i) => `($${i + 1})`).join(',');
+                await dbClient.query(`
+                    INSERT INTO ats_users (user_id) VALUES ${placeholders}
+                    ON CONFLICT (user_id) DO NOTHING
+                `, userArray);
+            }
+
+            for (const record of records) {
+                const direction = record.direction === 'INBOUND' ? 'in' : (record.direction === 'OUTBOUND' ? 'out' : null);
+                const clientPhone = direction === 'in' ? (record.phone_from || record.phone) : (record.phone_to || record.phone);
+                const diversion = direction === 'in' ? (record.phone_to || null) : null;
+
+                const callId = record.externalTrackingId
+                    ? `bl-${record.externalTrackingId}`
+                    : `bl-${record.startDate}-${direction}-${clientPhone || 'unknown'}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+                const values = [
+                    callId, direction, mapBeelineStatus(record.status), clientPhone,
+                    record.abonent ? record.abonent.userId : null,
+                    record.abonent ? record.abonent.extension : null,
+                    record.department || null, null, diversion,
+                    record.startDate ? new Date(record.startDate) : null,
+                    null, record.duration ? Math.round(record.duration / 1000) : null, null
+                ];
+
+                const query = `
+                    INSERT INTO calls (call_id, type, status, client_phone, user_id, ext, group_name, telnum, diversion, start_time, wait_time, duration, recording_link)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    ON CONFLICT (start_time, type, client_phone, user_id) DO NOTHING
+                `;
+                await dbClient.query(query, values);
+                inserted++;
+            }
+        } finally {
+            dbClient.release();
+        }
+
+        console.log(`Loaded ${inserted} records from Beeline statistics (page ${page})`);
+        totalInserted += inserted;
+
+        if (page === 0) {
+            try {
+                await fetchRecordingsForDateRange(dateFromStr, dateToStr);
+            } catch (recErr) {
+                console.error('Failed to fetch recordings:', recErr.message);
+            }
+        }
+
+        if (records.length < pageSize) hasMore = false;
+        page++;
+    }
+
+    return totalInserted;
 }
 
 // После синхронизации статистики подтягивает ссылки на записи разговоров
@@ -304,6 +302,47 @@ async function fetchRecordingsForDateRange(dateFromStr, dateToStr) {
     console.log(`Updated ${updated} recordings for period`);
 }
 
+// Функция для очистки дубликатов пропущенных звонков
+async function cleanDuplicateMissedCalls(clientPhone, callDate) {
+    try {
+        // Проверяем, есть ли принятые звонки для этого номера в течение дня
+        const checkQuery = `
+            SELECT MIN(start_time) as first_success_time
+            FROM calls
+            WHERE client_phone = $1 
+              AND DATE(start_time) = $2
+              AND status = 'Success'
+        `;
+        
+        const checkResult = await pool.query(checkQuery, [clientPhone, callDate]);
+        
+        if (checkResult.rows.length > 0 && checkResult.rows[0].first_success_time) {
+            const firstSuccessTime = checkResult.rows[0].first_success_time;
+            
+            // Удаляем все пропущенные звонки до первого успешного
+            const deleteQuery = `
+                DELETE FROM calls
+                WHERE client_phone = $1 
+                  AND DATE(start_time) = $2
+                  AND status = 'Missed'
+                  AND start_time < $3
+            `;
+            
+            const deleteResult = await pool.query(deleteQuery, [clientPhone, callDate, firstSuccessTime]);
+            
+            if (deleteResult.rowCount > 0) {
+                console.log(`Cleaned ${deleteResult.rowCount} missed calls for ${clientPhone} on ${callDate} (before first success at ${firstSuccessTime})`);
+                return deleteResult.rowCount;
+            }
+        }
+        
+        return 0;
+    } catch (error) {
+        console.error('Error cleaning duplicate missed calls:', error);
+        return 0;
+    }
+}
+
 // POST /api/beeline/history — приём данных о звонках от Beeline
 app.post('/api/beeline/history', async (req, res) => {
     console.log('Beeline history body:', req.body);
@@ -354,6 +393,13 @@ app.post('/api/beeline/history', async (req, res) => {
 
     try {
         await pool.query(query, values);
+        
+        // Если это успешный звонок, очищаем дубликаты пропущенных
+        if (req.body.status === 'Success' && req.body.start) {
+            const callDate = new Date(req.body.start);
+            await cleanDuplicateMissedCalls(phone, callDate);
+        }
+        
         return res.status(200).send();
     } catch (err) {
         console.error('Database error in /api/beeline/history:', err);
@@ -412,6 +458,71 @@ app.post('/api/calls/sync', async (req, res) => {
     }
 });
 
+// POST /api/calls/clean-duplicates — очистка дубликатов пропущенных звонков
+app.post('/api/calls/clean-duplicates', async (req, res) => {
+    console.log('Received request to clean duplicates');
+    
+    try {
+        // Находим группы звонков с одинаковым номером, датой и временем (с точностью до минуты)
+        const duplicatesQuery = `
+            SELECT 
+                client_phone,
+                DATE_TRUNC('minute', start_time) as call_minute,
+                COUNT(*) as call_count,
+                COUNT(CASE WHEN status = 'Success' THEN 1 END) as success_count,
+                MIN(start_time) as min_time,
+                MAX(start_time) as max_time
+            FROM calls 
+            WHERE client_phone IS NOT NULL 
+                AND start_time >= CURRENT_DATE - INTERVAL '30 days'
+            GROUP BY client_phone, DATE_TRUNC('minute', start_time)
+            HAVING COUNT(*) > 1 AND COUNT(CASE WHEN status = 'Success' THEN 1 END) > 0
+        `;
+        
+        console.log('Executing query to find duplicate groups...');
+        const duplicateGroups = await pool.query(duplicatesQuery);
+        console.log(`Found ${duplicateGroups.rows.length} groups with exact time duplicates`);
+
+        let totalDeleted = 0;
+        
+        // Обрабатываем каждую группу
+        for (const group of duplicateGroups.rows) {
+            console.log(`Processing group: ${group.client_phone} at ${group.call_minute}, Total: ${group.call_count}, Success: ${group.success_count}`);
+            
+            // Если есть принятые звонки, удаляем все пропущенные с тем же временем
+            if (group.success_count > 0) {
+                console.log(`Deleting missed calls for ${group.client_phone}...`);
+                // Удаляем все пропущенные звонки для этой группы
+                const deleteQuery = `
+                    DELETE FROM calls
+                    WHERE client_phone = $1 
+                        AND DATE_TRUNC('minute', start_time) = $2
+                        AND status = 'Missed'
+                `;
+                
+                const deleteResult = await pool.query(deleteQuery, [
+                    group.client_phone, 
+                    group.call_minute
+                ]);
+                
+                const deletedCount = deleteResult.rowCount;
+                totalDeleted += deletedCount;
+                
+                console.log(`Deleted ${deletedCount} missed calls for ${group.client_phone} at ${group.call_minute}`);
+            }
+        }
+        
+        console.log(`Total deleted: ${totalDeleted} missed calls`);
+        const result = { deleted: totalDeleted, groups: duplicateGroups.rows.length };
+        console.log(`Returning response:`, result);
+        res.status(200).json(result);
+        
+    } catch (err) {
+        console.error('Error cleaning duplicate calls:', err);
+        res.status(500).json({ error: 'Failed to clean duplicates' });
+    }
+});
+
 // GET / — редирект на журнал звонков
 app.get('/', (req, res) => {
     res.redirect('/calls');
@@ -419,8 +530,13 @@ app.get('/', (req, res) => {
 
 // GET /calls — страница со списком звонков с фильтрацией по дате и пагинацией
 app.get('/calls', async (req, res) => {
+    // Запрещаем кэширование для получения актуальных данных
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '-1');
+    
     try {
-        const { dateFrom, dateTo, preset } = req.query;
+        const { dateFrom, dateTo, preset, firstTime } = req.query;
         let page = parseInt(req.query.page, 10) || 1;
         const limit = parseInt(req.query.limit, 10) || 50;
         if (page < 1) page = 1;
@@ -445,9 +561,15 @@ app.get('/calls', async (req, res) => {
             weekAgo.setDate(weekAgo.getDate() - 7);
             effectiveDateFrom = weekAgo.toISOString().split('T')[0];
             effectiveDateTo = todayStart.toISOString().split('T')[0];
-        } else if (preset === 'month' || (!preset && !dateFrom && !dateTo)) {
+        } else if (preset === 'month') {
             const monthAgo = new Date(todayStart.getFullYear(), todayStart.getMonth(), 1);
             effectiveDateFrom = monthAgo.toISOString().split('T')[0];
+            effectiveDateTo = todayStart.toISOString().split('T')[0];
+        } else if (!preset && !dateFrom && !dateTo) {
+            // По умолчанию показываем последние 2 дня
+            const twoDaysAgo = new Date(todayStart);
+            twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
+            effectiveDateFrom = twoDaysAgo.toISOString().split('T')[0];
             effectiveDateTo = todayStart.toISOString().split('T')[0];
         }
 
@@ -470,13 +592,13 @@ app.get('/calls', async (req, res) => {
             params.push(effectiveDateFrom + ' 00:00:00');
             conditions.push(`start_time >= $${params.length}::timestamp`);
         }
-        if (effectiveDateTo) {
-            const nextDay = new Date(effectiveDateTo);
-            nextDay.setDate(nextDay.getDate() + 1);
-            const nextDayStr = nextDay.toISOString().split('T')[0];
-            params.push(nextDayStr + ' 00:00:00');
-            conditions.push(`start_time < $${params.length}::timestamp`);
-        }
+if (effectiveDateTo) {
+    const [y, m, d] = effectiveDateTo.split('-').map(Number);
+    const next = new Date(Date.UTC(y, m - 1, d + 1));
+    const nextDayStr = next.toISOString().split('T')[0];
+    params.push(nextDayStr + ' 00:00:00');
+    conditions.push(`start_time < $${params.length}::timestamp`);
+}
 
         if (conditions.length > 0) {
             const whereClause = ' WHERE ' + conditions.join(' AND ');
@@ -494,20 +616,193 @@ app.get('/calls', async (req, res) => {
         params.push(limit, offset);
 
         const result = await pool.query(queryText, params);
+        
+        // Фильтруем дубликаты: если есть принятый звонок, убираем все пропущенные с тем же номером и временем (с точностью до минуты)
+        let filteredCalls = [];
+        const callGroups = {};
+        
+        // Группируем звонки по номеру телефона и времени (с точностью до минуты)
+        result.rows.forEach(call => {
+            if (call.client_phone && call.start_time) {
+                const date = new Date(call.start_time);
+                const key = `${call.client_phone}-${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
+                
+                if (!callGroups[key]) {
+                    callGroups[key] = [];
+                }
+                callGroups[key].push(call);
+            } else {
+                // Если нет необходимой информации для группировки, добавляем как есть
+                filteredCalls.push(call);
+            }
+        });
+        
+        // Обрабатываем каждую группу
+        Object.values(callGroups).forEach(group => {
+            const hasSuccess = group.some(call => call.status === 'Success');
+            const missedCalls = group.filter(call => call.status === 'Missed');
+            
+            if (hasSuccess) {
+                // Если есть принятый звонок, добавляем только принятые
+                group.filter(call => call.status === 'Success').forEach(call => filteredCalls.push(call));
+            } else if (missedCalls.length > 1) {
+                // Если несколько пропущенных без принятых, добавляем только один (самый ранний)
+                const earliestMissed = missedCalls.reduce((prev, current) => 
+                    new Date(prev.start_time) < new Date(current.start_time) ? prev : current
+                );
+                filteredCalls.push(earliestMissed);
+            } else {
+                // Если нет принятых и не более одного пропущенного, добавляем все звонки
+                group.forEach(call => filteredCalls.push(call));
+            }
+        });
+        
+        // Если включен фильтр "Звонили в первый раз", отфильтруем только тех, кто звонит впервые
+        if (firstTime === 'on' && (effectiveDateFrom || (preset && preset !== ''))) {
+            // Определяем начальную дату для проверки истории
+            const historyCheckDate = new Date(effectiveDateFrom || '1970-01-01');
+            
+            // Находим все уникальные номера телефонов из отфильтрованных звонков
+            const phoneNumbers = [...new Set(filteredCalls.map(call => call.client_phone).filter(Boolean))];
+            
+            // Для каждого номера проверяем, были ли звонки до开始 периода
+            const firstTimeCallers = new Set();
+            
+            for (const phone of phoneNumbers) {
+                // Проверяем, были ли звонки с этого номера до выбранного периода
+                const historyQuery = `
+                    SELECT COUNT(*) as count
+                    FROM calls
+                    WHERE client_phone = $1
+                      AND start_time < $2
+                `;
+                
+                const historyResult = await pool.query(historyQuery, [phone, historyCheckDate]);
+                const hasHistory = parseInt(historyResult.rows[0].count, 10) > 0;
+                
+                if (!hasHistory) {
+                    firstTimeCallers.add(phone);
+                }
+            }
+            
+            // Оставляем только звонки от тех, кто звонит впервые
+            filteredCalls = filteredCalls.filter(call => 
+                call.client_phone && firstTimeCallers.has(call.client_phone)
+            );
+        }
 
         res.render('calls', {
-            calls: result.rows,
+            calls: filteredCalls,
             dateFrom: effectiveDateFrom,
             dateTo: effectiveDateTo,
             preset: preset || '',
             page: page,
             totalPages: totalPages,
             totalCount: totalCount,
-            limit: limit
+            limit: limit,
+            firstTime: firstTime === 'on' ? 'on' : ''
         });
     } catch (err) {
         console.error('Error in /calls:', err);
         res.status(500).send(`<h1>Internal Server Error</h1><pre>${err.stack}</pre>`);
+    }
+});
+
+// GET /stats — страница статистики звонков
+app.get('/stats', async (req, res) => {
+    try {
+        const newClientsQuery = `
+            WITH first_calls AS (
+                SELECT 
+                    client_phone,
+                    DATE_TRUNC('month', MIN(start_time)) as first_month
+                FROM calls
+                WHERE client_phone IS NOT NULL
+                GROUP BY client_phone
+            )
+            SELECT 
+                TO_CHAR(first_month, 'YYYY-MM') as month,
+                COUNT(*) as new_clients
+            FROM first_calls
+            GROUP BY month
+            ORDER BY month DESC
+        `;
+        const newClientsResult = await pool.query(newClientsQuery);
+
+        const monthlyStatsQuery = `
+            WITH call_groups AS (
+                SELECT 
+                    client_phone,
+                    DATE_TRUNC('minute', start_time) as call_minute,
+                    BOOL_OR(status = 'Success') as has_success,
+                    COUNT(*) FILTER (WHERE status = 'Missed') as missed_count
+                FROM calls
+                GROUP BY client_phone, DATE_TRUNC('minute', start_time)
+            ),
+            deduped AS (
+                SELECT 
+                    call_minute,
+                    CASE WHEN has_success THEN 1 ELSE 0 END as success_count,
+                    CASE WHEN NOT has_success AND missed_count > 0 THEN 1 ELSE 0 END as missed_count
+                FROM call_groups
+            )
+            SELECT 
+                TO_CHAR(call_minute, 'YYYY-MM') as month,
+                SUM(success_count + missed_count) as total_calls,
+                SUM(success_count) as success_calls,
+                SUM(missed_count) as missed_calls
+            FROM deduped
+            GROUP BY month
+            ORDER BY month DESC
+        `;
+        const monthlyStatsResult = await pool.query(monthlyStatsQuery);
+
+        res.render('stats', {
+            newClients: newClientsResult.rows,
+            monthlyStats: monthlyStatsResult.rows
+        });
+    } catch (err) {
+        console.error('Error in /stats:', err);
+        res.status(500).send('Ошибка при загрузке статистики');
+    }
+});
+
+// Полная синхронизация за 2025–2026 годы
+app.get('/api/sync-all', async (req, res) => {
+    try {
+        let totalSynced = 0;
+        const years = [2025, 2026];
+        const currentYear = new Date().getFullYear();
+        const currentMonth = new Date().getMonth() + 1;
+
+        for (const year of years) {
+            if (year > currentYear) continue;
+
+            const startDate = `${year}-01-01`;
+            let endDate;
+
+            if (year < currentYear) {
+                endDate = `${year}-12-31`;
+            } else {
+                // текущий год — до сегодняшнего дня
+                endDate = new Date().toISOString().split('T')[0];
+            }
+
+            console.log(`Syncing year ${year}: ${startDate} → ${endDate}`);
+            const count = await fetchHistoryFromBeeline(startDate, endDate);
+            totalSynced += count;
+            console.log(`Year ${year} synced: ${count} records`);
+        }
+
+        res.json({
+            success: true,
+            totalSynced,
+            years: years.filter(y => y <= currentYear),
+            message: 'Полная синхронизация завершена'
+        });
+    } catch (err) {
+        console.error('Full sync error:', err);
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -625,8 +920,21 @@ app.get('/api/calls/recording/:id', async (req, res) => {
         if (result.rows.length === 0) return res.status(404).send('Call not found');
         const call = result.rows[0];
 
+        console.log(`[Recording Request] Call ID: ${id}, Phone: ${call.client_phone}, Time: ${call.start_time}`);
+
         let url = await getRecordingUrlForCall(call);
-        if (!url) return res.status(404).send('Recording not found');
+        if (!url) {
+            console.log(`[Recording Request] No recording found for call ${id}`);
+            
+            // Пробуем найти запись напрямую через API
+            const recordingUrl = await findRecordingDirectly(call);
+            if (!recordingUrl) {
+                return res.status(404).send('Recording not found');
+            }
+            url = recordingUrl;
+        }
+
+        console.log(`[Recording Request] Found recording URL: ${url}`);
 
         // Если прямой доступ возможен, проксируем файл
         const parsed = new URL(url);
@@ -650,6 +958,100 @@ app.get('/api/calls/recording/:id', async (req, res) => {
         res.status(500).send('Server error');
     }
 });
+
+// Вспомогательная функция прямого поиска записи
+async function findRecordingDirectly(call) {
+    try {
+        const date = new Date(call.start_time);
+        const qs = new URLSearchParams({
+            dateFrom: formatBeelineDate(new Date(date.getTime() - 300000)),
+            dateTo: formatBeelineDate(new Date(date.getTime() + 300000))
+        }).toString();
+        
+        console.log(`[findRecordingDirectly] Searching with query: ${qs}`);
+
+        const options = {
+            hostname: BEELINE_API_HOST,
+            port: 443,
+            path: `/apis/portal/records?${qs}`,
+            method: 'GET',
+            headers: {
+                'X-MPBX-API-AUTH-TOKEN': CRM_TOKEN,
+                'Accept': 'application/json'
+            }
+        };
+
+        const records = await new Promise((resolve, reject) => {
+            const req = https.request(options, (res) => {
+                let data = '';
+                console.log(`[findRecordingDirectly] Response status: ${res.statusCode}`);
+                res.setEncoding('utf8');
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                    if (res.statusCode !== 200) return resolve([]);
+                    try {
+                        const parsed = JSON.parse(data);
+                        resolve(Array.isArray(parsed) ? parsed : []);
+                    } catch (e) { resolve([]); }
+                });
+            });
+            req.on('error', (e) => reject(e));
+            req.end();
+        });
+
+        if (!records || records.length === 0) return null;
+
+        // Найти запись по номеру телефона
+        const callPhoneDigits = call.client_phone.replace(/[^0-9]/g, '').slice(-7);
+        let matched = null;
+        
+        for (const r of records) {
+            const recordPhoneDigits = r.phone.replace(/[^0-9]/g, '').slice(-7);
+            if (callPhoneDigits === recordPhoneDigits) {
+                matched = r;
+                break;
+            }
+        }
+
+        if (!matched && records.length > 0) {
+            matched = records[0];
+        }
+
+        if (!matched || !matched.id) return null;
+
+        // Получаем прямую ссылку на запись
+        const ref = await new Promise((resolve, reject) => {
+            const req = https.request({
+                hostname: BEELINE_API_HOST, port: 443,
+                path: `/apis/portal/records/${encodeURIComponent(matched.id)}/reference`,
+                method: 'GET',
+                headers: { 'X-MPBX-API-AUTH-TOKEN': CRM_TOKEN, 'Accept': 'application/json' }
+            }, (res) => {
+                let data = '';
+                res.setEncoding('utf8');
+                res.on('data', c => data += c);
+                res.on('end', () => {
+                    if (res.statusCode !== 200) return resolve(null);
+                    try { const p = JSON.parse(data); resolve(p && p.url ? p.url : null); }
+                    catch (e) { resolve(null); }
+                });
+            });
+            req.on('error', e => reject(e));
+            req.end();
+        });
+
+        if (ref) {
+            // Сохраняем в БД
+            await pool.query('UPDATE calls SET recording_link = $1 WHERE id = $2', [ref, call.id]);
+            return ref;
+        }
+
+        return null;
+    } catch (err) {
+        console.error('Error in findRecordingDirectly:', err.message);
+        return null;
+    }
+}
 
 app.listen(PORT, () => {
     console.log(`Server is running on port ${PORT}`);

@@ -1,0 +1,10 @@
+<!-- Shared Sidebar for Men's Motors CRM -->
+<div class="sidebar">
+    <div class="d-flex align-items-center mb-4 px-2">
+        <img src="/logo.png" alt="Logo" height="32" class="me-2">
+        <span style="color:#fff; font-weight:600; font-size:1.05rem;">Men's Motors CRM</span>
+    </div>
+    <a href="/calls" class="nav-link<%= typeof currentPage !== 'undefined' && currentPage === 'calls' ? ' active' : '' %>">📞 Звонки</a>
+    <a href="/stats" class="nav-link<%= typeof currentPage !== 'undefined' && currentPage === 'stats' ? ' active' : '' %>">📊 Статистика</a>
+    <a href="#" class="nav-link text-muted" style="opacity:0.5; pointer-events:none;">👥 Клиенты (скоро)</a>
+</div>
